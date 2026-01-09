@@ -1,3 +1,8 @@
 @openzeppelin/=lib/openzeppelin-contracts/
+@openzeppelin/contracts/=lib/openzeppelin-contracts/contracts/
 @prb/math/=lib/prb-math/
+erc4626-tests/=lib/erc4626-tests/
 forge-std/=lib/forge-std/src/
+halmos-cheatcodes/=lib/openzeppelin-contracts/lib/halmos-cheatcodes/src/
+openzeppelin-contracts/=lib/openzeppelin-contracts/
+prb-math/=lib/prb-math/src/

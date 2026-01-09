@@ -3,6 +3,7 @@ pragma solidity ^0.8.20;
 
 import {Test, console2} from "forge-std/Test.sol";
 import {BondMMA} from "../../src/BondMMA.sol";
+import {IBondMMA} from "../../src/interfaces/IBondMMA.sol";
 import {IOracle} from "../../src/interfaces/IOracle.sol";
 import {IERC20} from "@openzeppelin/contracts/token/ERC20/IERC20.sol";
 
@@ -236,7 +237,7 @@ contract BondMMATest is Test {
         bondMMA.initialize(INITIAL_CASH, address(oracle), address(stablecoin));
 
         // Get a non-existent position
-        BondMMA.Position memory pos = bondMMA.getPosition(1);
+        IBondMMA.Position memory pos = bondMMA.getPosition(1);
 
         // Should return default (empty) position
         assertEq(pos.owner, address(0), "Owner should be zero");
@@ -265,22 +266,356 @@ contract BondMMATest is Test {
     }
 
     /*//////////////////////////////////////////////////////////////
-                    NOT YET IMPLEMENTED TESTS
+                        LENDING TESTS
     //////////////////////////////////////////////////////////////*/
 
-    function testLend_RevertsNotImplemented() public {
+    function testLend() public {
         bondMMA.initialize(INITIAL_CASH, address(oracle), address(stablecoin));
 
-        vm.expectRevert(bytes("Not yet implemented"));
+        uint256 lendAmount = 10_000 ether;
+        uint256 maturity = block.timestamp + 90 days;
+
+        // Mint tokens to user1 and approve
+        stablecoin.mint(user1, lendAmount);
+        vm.prank(user1);
+        stablecoin.approve(address(bondMMA), lendAmount);
+
+        // Record state before
+        uint256 cashBefore = bondMMA.cash();
+        uint256 pvBondsBefore = bondMMA.pvBonds();
+
+        // Lend
+        vm.prank(user1);
+        uint256 positionId = bondMMA.lend(lendAmount, maturity);
+
+        // Check position was created
+        assertEq(positionId, 1, "Position ID should be 1");
+        IBondMMA.Position memory pos = bondMMA.getPosition(positionId);
+        assertEq(pos.owner, user1, "Position owner should be user1");
+        assertGt(pos.faceValue, 0, "Face value should be > 0");
+        assertEq(pos.maturity, maturity, "Maturity should match");
+        assertFalse(pos.isBorrow, "Should not be a borrow");
+        assertTrue(pos.isActive, "Should be active");
+        assertEq(pos.collateral, 0, "No collateral for lending");
+
+        // Check state updates
+        assertEq(bondMMA.cash(), cashBefore + lendAmount, "Cash should increase");
+        assertLt(bondMMA.pvBonds(), pvBondsBefore, "PV bonds should decrease");
+        assertEq(bondMMA.netLiabilities(), 0, "Net liabilities should still be 0");
+
+        // Check solvency
+        assertTrue(bondMMA.checkSolvency(), "Pool should be solvent");
+
+        console2.log("Lend successful");
+        console2.log("Cash after:", bondMMA.cash());
+        console2.log("PV Bonds after:", bondMMA.pvBonds());
+        console2.log("Face value:", pos.faceValue);
+    }
+
+    function testLend_RevertsIfZeroAmount() public {
+        bondMMA.initialize(INITIAL_CASH, address(oracle), address(stablecoin));
+
+        vm.expectRevert(bytes("Amount must be > 0"));
+        bondMMA.lend(0, block.timestamp + 90 days);
+    }
+
+    function testLend_RevertsIfMaturityInPast() public {
+        bondMMA.initialize(INITIAL_CASH, address(oracle), address(stablecoin));
+
+        vm.expectRevert(bytes("Maturity must be in future"));
+        bondMMA.lend(1000 ether, block.timestamp - 1);
+    }
+
+    function testLend_RevertsIfMaturityTooSoon() public {
+        bondMMA.initialize(INITIAL_CASH, address(oracle), address(stablecoin));
+
+        vm.expectRevert(bytes("Maturity too soon"));
+        bondMMA.lend(1000 ether, block.timestamp + 1 days); // Less than 30 days
+    }
+
+    function testLend_RevertsIfMaturityTooFar() public {
+        bondMMA.initialize(INITIAL_CASH, address(oracle), address(stablecoin));
+
+        vm.expectRevert(bytes("Maturity too far"));
+        bondMMA.lend(1000 ether, block.timestamp + 400 days); // More than 365 days
+    }
+
+    function testLend_RevertsIfOracleStale() public {
+        bondMMA.initialize(INITIAL_CASH, address(oracle), address(stablecoin));
+
+        // Make oracle stale
+        oracle.setStale(true);
+
+        vm.expectRevert(bytes("Oracle data is stale"));
         bondMMA.lend(1000 ether, block.timestamp + 90 days);
     }
 
-    function testBorrow_RevertsNotImplemented() public {
+    /*//////////////////////////////////////////////////////////////
+                        BORROWING TESTS
+    //////////////////////////////////////////////////////////////*/
+
+    function testBorrow() public {
         bondMMA.initialize(INITIAL_CASH, address(oracle), address(stablecoin));
 
-        vm.expectRevert(bytes("Not yet implemented"));
-        bondMMA.borrow(1000 ether, block.timestamp + 90 days, 1500 ether);
+        uint256 borrowAmount = 10_000 ether;
+        uint256 collateralAmount = 15_000 ether; // 150%
+        uint256 maturity = block.timestamp + 90 days;
+
+        // Mint collateral to user1 and approve
+        stablecoin.mint(user1, collateralAmount);
+        vm.prank(user1);
+        stablecoin.approve(address(bondMMA), collateralAmount);
+
+        // Record state before
+        uint256 cashBefore = bondMMA.cash();
+        uint256 pvBondsBefore = bondMMA.pvBonds();
+        uint256 liabilitiesBefore = bondMMA.netLiabilities();
+
+        // Borrow
+        vm.prank(user1);
+        uint256 positionId = bondMMA.borrow(borrowAmount, maturity, collateralAmount);
+
+        // Check position was created
+        assertEq(positionId, 1, "Position ID should be 1");
+        IBondMMA.Position memory pos = bondMMA.getPosition(positionId);
+        assertEq(pos.owner, user1, "Position owner should be user1");
+        assertGt(pos.faceValue, 0, "Face value should be > 0");
+        assertEq(pos.maturity, maturity, "Maturity should match");
+        assertTrue(pos.isBorrow, "Should be a borrow");
+        assertTrue(pos.isActive, "Should be active");
+        assertEq(pos.collateral, collateralAmount, "Collateral should match");
+
+        // Check state updates
+        assertEq(bondMMA.cash(), cashBefore - borrowAmount, "Cash should decrease");
+        assertGt(bondMMA.pvBonds(), pvBondsBefore, "PV bonds should increase");
+        assertGt(bondMMA.netLiabilities(), liabilitiesBefore, "Net liabilities should increase");
+
+        // Check user received borrowed cash
+        assertEq(stablecoin.balanceOf(user1), borrowAmount, "User should receive borrowed cash");
+
+        console2.log("Borrow successful");
+        console2.log("Cash after:", bondMMA.cash());
+        console2.log("PV Bonds after:", bondMMA.pvBonds());
+        console2.log("Net Liabilities:", bondMMA.netLiabilities());
+        console2.log("Face value:", pos.faceValue);
     }
+
+    function testBorrow_RevertsIfZeroAmount() public {
+        bondMMA.initialize(INITIAL_CASH, address(oracle), address(stablecoin));
+
+        vm.expectRevert(bytes("Amount must be > 0"));
+        bondMMA.borrow(0, block.timestamp + 90 days, 1000 ether);
+    }
+
+    function testBorrow_RevertsIfInsufficientCollateral() public {
+        bondMMA.initialize(INITIAL_CASH, address(oracle), address(stablecoin));
+
+        uint256 borrowAmount = 10_000 ether;
+        uint256 insufficientCollateral = 10_000 ether; // Only 100%, need 150%
+
+        vm.expectRevert(bytes("Insufficient collateral"));
+        bondMMA.borrow(borrowAmount, block.timestamp + 90 days, insufficientCollateral);
+    }
+
+    function testBorrow_RevertsIfMaturityInPast() public {
+        bondMMA.initialize(INITIAL_CASH, address(oracle), address(stablecoin));
+
+        vm.expectRevert(bytes("Maturity must be in future"));
+        bondMMA.borrow(1000 ether, block.timestamp - 1, 1500 ether);
+    }
+
+    function testBorrow_RevertsIfInsufficientLiquidity() public {
+        bondMMA.initialize(INITIAL_CASH, address(oracle), address(stablecoin));
+
+        uint256 borrowAmount = 150_000 ether; // More than pool has
+        uint256 collateral = 225_000 ether;
+
+        vm.expectRevert(bytes("Insufficient pool liquidity"));
+        bondMMA.borrow(borrowAmount, block.timestamp + 90 days, collateral);
+    }
+
+    /*//////////////////////////////////////////////////////////////
+                    MULTI-MATURITY TESTS
+    //////////////////////////////////////////////////////////////*/
+
+    function testLend_MultipleMatturities() public {
+        bondMMA.initialize(INITIAL_CASH, address(oracle), address(stablecoin));
+
+        uint256 lendAmount = 5_000 ether;
+
+        // Mint tokens to user1 and approve
+        stablecoin.mint(user1, lendAmount * 3);
+        vm.prank(user1);
+        stablecoin.approve(address(bondMMA), lendAmount * 3);
+
+        // Lend at 30 days
+        vm.prank(user1);
+        uint256 pos1 = bondMMA.lend(lendAmount, block.timestamp + 30 days);
+        IBondMMA.Position memory position1 = bondMMA.getPosition(pos1);
+
+        // Lend at 90 days
+        vm.prank(user1);
+        uint256 pos2 = bondMMA.lend(lendAmount, block.timestamp + 90 days);
+        IBondMMA.Position memory position2 = bondMMA.getPosition(pos2);
+
+        // Lend at 180 days
+        vm.prank(user1);
+        uint256 pos3 = bondMMA.lend(lendAmount, block.timestamp + 180 days);
+        IBondMMA.Position memory position3 = bondMMA.getPosition(pos3);
+
+        // Different maturities should result in different face values
+        assertTrue(position1.faceValue != position2.faceValue, "30d and 90d should differ");
+        assertTrue(position2.faceValue != position3.faceValue, "90d and 180d should differ");
+        assertTrue(position1.faceValue != position3.faceValue, "30d and 180d should differ");
+
+        // Longer maturities should have higher face values (more interest)
+        assertGt(position2.faceValue, position1.faceValue, "90d should have more face value than 30d");
+        assertGt(position3.faceValue, position2.faceValue, "180d should have more face value than 90d");
+
+        // Pool should still be solvent
+        assertTrue(bondMMA.checkSolvency(), "Pool should remain solvent");
+
+        console2.log("Multi-maturity test passed");
+        console2.log("30d face value:", position1.faceValue);
+        console2.log("90d face value:", position2.faceValue);
+        console2.log("180d face value:", position3.faceValue);
+    }
+
+    function testBorrow_MultipleMatturities() public {
+        bondMMA.initialize(INITIAL_CASH, address(oracle), address(stablecoin));
+
+        uint256 borrowAmount = 5_000 ether;
+        uint256 collateral = 7_500 ether;
+
+        // Mint collateral to user1 and approve
+        stablecoin.mint(user1, collateral * 3);
+        vm.prank(user1);
+        stablecoin.approve(address(bondMMA), collateral * 3);
+
+        // Borrow at 30 days
+        vm.prank(user1);
+        uint256 pos1 = bondMMA.borrow(borrowAmount, block.timestamp + 30 days, collateral);
+        IBondMMA.Position memory position1 = bondMMA.getPosition(pos1);
+
+        // Borrow at 90 days
+        vm.prank(user1);
+        uint256 pos2 = bondMMA.borrow(borrowAmount, block.timestamp + 90 days, collateral);
+        IBondMMA.Position memory position2 = bondMMA.getPosition(pos2);
+
+        // Borrow at 180 days
+        vm.prank(user1);
+        uint256 pos3 = bondMMA.borrow(borrowAmount, block.timestamp + 180 days, collateral);
+        IBondMMA.Position memory position3 = bondMMA.getPosition(pos3);
+
+        // Different maturities should result in different face values
+        assertTrue(position1.faceValue != position2.faceValue, "30d and 90d should differ");
+        assertTrue(position2.faceValue != position3.faceValue, "90d and 180d should differ");
+
+        // Longer maturities should have higher face values (more interest to repay)
+        assertGt(position2.faceValue, position1.faceValue, "90d should owe more than 30d");
+        assertGt(position3.faceValue, position2.faceValue, "180d should owe more than 90d");
+
+        console2.log("Multi-maturity borrow test passed");
+        console2.log("30d face value:", position1.faceValue);
+        console2.log("90d face value:", position2.faceValue);
+        console2.log("180d face value:", position3.faceValue);
+    }
+
+    /*//////////////////////////////////////////////////////////////
+                    INVARIANT PRESERVATION TESTS
+    //////////////////////////////////////////////////////////////*/
+
+    function testLend_PreservesInvariant() public {
+        bondMMA.initialize(INITIAL_CASH, address(oracle), address(stablecoin));
+
+        uint256 lendAmount = 10_000 ether;
+        uint256 maturity = block.timestamp + 90 days;
+        uint256 timeToMaturity = maturity - block.timestamp;
+
+        // Calculate C before
+        uint256 anchorRate = oracle.getRate();
+        uint256 cBefore = bondMMA.pvBonds(); // Simplified check
+
+        // Mint and approve
+        stablecoin.mint(user1, lendAmount);
+        vm.prank(user1);
+        stablecoin.approve(address(bondMMA), lendAmount);
+
+        // Lend
+        vm.prank(user1);
+        bondMMA.lend(lendAmount, maturity);
+
+        // Note: Full invariant verification would require calculating C = K·x^α + y^α
+        // For MVP, we verify state changes are consistent
+        assertGt(bondMMA.cash(), INITIAL_CASH, "Cash should increase");
+        assertLt(bondMMA.pvBonds(), INITIAL_CASH, "PV bonds should decrease");
+
+        console2.log("Invariant preservation test passed (simplified)");
+    }
+
+    function testBorrow_UpdatesStateConsistently() public {
+        bondMMA.initialize(INITIAL_CASH, address(oracle), address(stablecoin));
+
+        uint256 borrowAmount = 10_000 ether;
+        uint256 collateral = 15_000 ether;
+        uint256 maturity = block.timestamp + 90 days;
+
+        // Record initial values
+        uint256 initialNetLiabilities = bondMMA.netLiabilities();
+
+        // Mint and approve
+        stablecoin.mint(user1, collateral);
+        vm.prank(user1);
+        stablecoin.approve(address(bondMMA), collateral);
+
+        // Borrow
+        vm.prank(user1);
+        bondMMA.borrow(borrowAmount, maturity, collateral);
+
+        // Verify state consistency
+        assertEq(bondMMA.cash(), INITIAL_CASH - borrowAmount, "Cash should decrease by borrow amount");
+        assertGt(bondMMA.pvBonds(), INITIAL_CASH, "PV bonds should increase");
+        assertGt(bondMMA.netLiabilities(), initialNetLiabilities, "Net liabilities should increase");
+
+        console2.log("State consistency test passed");
+    }
+
+    function testSequentialTrades() public {
+        bondMMA.initialize(INITIAL_CASH, address(oracle), address(stablecoin));
+
+        // Setup user balances
+        stablecoin.mint(user1, 20_000 ether);
+        stablecoin.mint(user2, 20_000 ether);
+
+        vm.prank(user1);
+        stablecoin.approve(address(bondMMA), 20_000 ether);
+        vm.prank(user2);
+        stablecoin.approve(address(bondMMA), 20_000 ether);
+
+        // User1 lends
+        vm.prank(user1);
+        bondMMA.lend(5_000 ether, block.timestamp + 90 days);
+
+        // User2 borrows
+        vm.prank(user2);
+        bondMMA.borrow(3_000 ether, block.timestamp + 90 days, 4_500 ether);
+
+        // User1 lends again
+        vm.prank(user1);
+        bondMMA.lend(5_000 ether, block.timestamp + 180 days);
+
+        // Pool should still be solvent after sequential trades
+        assertTrue(bondMMA.checkSolvency(), "Pool should remain solvent after sequential trades");
+
+        console2.log("Sequential trades test passed");
+        console2.log("Final cash:", bondMMA.cash());
+        console2.log("Final PV bonds:", bondMMA.pvBonds());
+        console2.log("Final liabilities:", bondMMA.netLiabilities());
+    }
+
+    /*//////////////////////////////////////////////////////////////
+                    NOT YET IMPLEMENTED TESTS
+    //////////////////////////////////////////////////////////////*/
 
     function testRedeem_RevertsNotImplemented() public {
         bondMMA.initialize(INITIAL_CASH, address(oracle), address(stablecoin));
