@@ -45,7 +45,7 @@ contract BondMMA is IBondMMA, ReentrancyGuard, Ownable {
     uint256 public nextPositionId;
 
     /// @notice Mapping of position ID to Position struct
-    mapping(uint256 => Position) public positions;
+    mapping(uint256 => IBondMMA.Position) public positions;
 
     /// @notice Oracle contract providing anchor rate r*
     IOracle public oracle;
@@ -184,7 +184,7 @@ contract BondMMA is IBondMMA, ReentrancyGuard, Ownable {
      * @param positionId ID of the position
      * @return position Position struct
      */
-    function getPosition(uint256 positionId) external view returns (Position memory position) {
+    function getPosition(uint256 positionId) external view returns (IBondMMA.Position memory position) {
         return positions[positionId];
     }
 
@@ -206,8 +206,53 @@ contract BondMMA is IBondMMA, ReentrancyGuard, Ownable {
         requireSolvency
         returns (uint256 positionId)
     {
-        // To be implemented in Phase 4
-        revert("Not yet implemented");
+        // Validate inputs
+        require(amount > 0, "Amount must be > 0");
+        require(maturity > block.timestamp, "Maturity must be in future");
+
+        // Calculate time to maturity
+        uint256 timeToMaturity = maturity - block.timestamp;
+        require(timeToMaturity >= MIN_MATURITY, "Maturity too soon");
+        require(timeToMaturity <= MAX_MATURITY, "Maturity too far");
+
+        // Get current rate from oracle
+        uint256 anchorRate = oracle.getRate();
+        require(!oracle.isStale(), "Oracle data is stale");
+
+        // Step 1: Calculate bond face value from cash amount
+        // When lending, user gives cash and receives bonds (isPositive = true)
+        uint256 deltaX = BondMMMath.calculateDeltaX(pvBonds, cash, amount, timeToMaturity, anchorRate, true);
+
+        // Step 2: Calculate current bond price p = e^(-rt)
+        uint256 currentRate = BondMMMath.calculateRate(pvBonds, cash, anchorRate);
+        uint256 price = BondMMMath.calculatePrice(timeToMaturity, currentRate);
+
+        // Step 3: Update pool state
+        // Pool receives cash from lender
+        cash += amount;
+
+        // Pool's bond position decreases (negative lending = liability to pay bonds)
+        // pvBonds is stored in present value terms
+        uint256 deltaPV = (deltaX * price) / PRECISION;
+        pvBonds -= deltaPV;
+
+        // Step 4: Transfer cash from user to pool
+        stablecoin.safeTransferFrom(msg.sender, address(this), amount);
+
+        // Step 5: Mint position for user
+        positionId = nextPositionId++;
+        positions[positionId] = IBondMMA.Position({
+            owner: msg.sender,
+            faceValue: deltaX,
+            maturity: maturity,
+            collateral: 0, // No collateral for lending positions
+            isBorrow: false,
+            isActive: true
+        });
+
+        emit Lend(msg.sender, positionId, amount, deltaX, maturity);
+
+        // requireSolvency modifier will check solvency after this function executes
     }
 
     /**
@@ -223,8 +268,62 @@ contract BondMMA is IBondMMA, ReentrancyGuard, Ownable {
         onlyInitialized
         returns (uint256 positionId)
     {
-        // To be implemented in Phase 4
-        revert("Not yet implemented");
+        // Validate inputs
+        require(amount > 0, "Amount must be > 0");
+        require(maturity > block.timestamp, "Maturity must be in future");
+
+        // Step 1: Require collateral upfront (150% of borrowed amount)
+        uint256 requiredCollateral = (amount * COLLATERAL_RATIO) / 100;
+        require(collateral >= requiredCollateral, "Insufficient collateral");
+
+        // Calculate time to maturity
+        uint256 timeToMaturity = maturity - block.timestamp;
+        require(timeToMaturity >= MIN_MATURITY, "Maturity too soon");
+        require(timeToMaturity <= MAX_MATURITY, "Maturity too far");
+
+        // Get current rate from oracle
+        uint256 anchorRate = oracle.getRate();
+        require(!oracle.isStale(), "Oracle data is stale");
+
+        // Check pool has enough cash to lend
+        require(cash >= amount, "Insufficient pool liquidity");
+
+        // Step 2: Calculate bond face value from cash amount
+        // When borrowing, user takes cash and owes bonds (isPositive = false)
+        uint256 deltaX = BondMMMath.calculateDeltaX(pvBonds, cash, amount, timeToMaturity, anchorRate, false);
+
+        // Step 3: Calculate current bond price p = e^(-rt)
+        uint256 currentRate = BondMMMath.calculateRate(pvBonds, cash, anchorRate);
+        uint256 price = BondMMMath.calculatePrice(timeToMaturity, currentRate);
+
+        // Step 4: Update pool state
+        // Pool gives cash to borrower
+        cash -= amount;
+
+        // Pool's bond position increases (borrower owes pool)
+        // pvBonds and netLiabilities stored in present value terms
+        uint256 deltaPV = (deltaX * price) / PRECISION;
+        pvBonds += deltaPV;
+        netLiabilities += deltaPV;
+
+        // Step 5: Transfer collateral from user to pool
+        stablecoin.safeTransferFrom(msg.sender, address(this), collateral);
+
+        // Step 6: Transfer borrowed cash from pool to user
+        stablecoin.safeTransfer(msg.sender, amount);
+
+        // Step 7: Mint position for user
+        positionId = nextPositionId++;
+        positions[positionId] = IBondMMA.Position({
+            owner: msg.sender,
+            faceValue: deltaX,
+            maturity: maturity,
+            collateral: collateral,
+            isBorrow: true,
+            isActive: true
+        });
+
+        emit Borrow(msg.sender, positionId, amount, deltaX, maturity, collateral);
     }
 
     /**
