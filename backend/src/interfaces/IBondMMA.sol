@@ -7,6 +7,7 @@ pragma solidity ^0.8.20;
  * @dev Defines all external functions, events, and data structures for the AMM
  */
 interface IBondMMA {
+    // Force language server refresh
     /*//////////////////////////////////////////////////////////////
                                 STRUCTS
     //////////////////////////////////////////////////////////////*/
@@ -18,11 +19,13 @@ interface IBondMMA {
      * @param maturity Timestamp when position matures
      * @param isBorrow True if this is a borrow position, false if lending
      * @param isActive True if position is still active, false if closed
+     * @param collateral Amount of collateral deposited (only for borrow positions)
      */
     struct Position {
         address owner;
         uint256 faceValue;
         uint256 maturity;
+        uint256 collateral;
         bool isBorrow;
         bool isActive;
     }
