@@ -609,20 +609,262 @@ contract BondMMATest is Test {
     }
 
     /*//////////////////////////////////////////////////////////////
-                    NOT YET IMPLEMENTED TESTS
+                        REDEEM TESTS
     //////////////////////////////////////////////////////////////*/
 
-    function testRedeem_RevertsNotImplemented() public {
+    function testRedeem() public {
         bondMMA.initialize(INITIAL_CASH, address(oracle), address(stablecoin));
 
-        vm.expectRevert(bytes("Not yet implemented"));
-        bondMMA.redeem(1);
+        uint256 lendAmount = 10_000 ether;
+        uint256 maturity = block.timestamp + 90 days;
+
+        // Setup: User lends
+        stablecoin.mint(user1, lendAmount);
+        vm.prank(user1);
+        stablecoin.approve(address(bondMMA), lendAmount);
+
+        vm.prank(user1);
+        uint256 positionId = bondMMA.lend(lendAmount, maturity);
+
+        IBondMMA.Position memory posBeforeRedeem = bondMMA.getPosition(positionId);
+        uint256 faceValue = posBeforeRedeem.faceValue;
+
+        // Warp to maturity
+        vm.warp(maturity);
+
+        // Record state before redeem
+        uint256 cashBefore = bondMMA.cash();
+        uint256 pvBondsBefore = bondMMA.pvBonds();
+        uint256 userBalBefore = stablecoin.balanceOf(user1);
+
+        // Redeem
+        vm.prank(user1);
+        bondMMA.redeem(positionId);
+
+        // Check position burned
+        IBondMMA.Position memory posAfter = bondMMA.getPosition(positionId);
+        assertFalse(posAfter.isActive, "Position should be inactive");
+
+        // Check state updates
+        assertEq(bondMMA.cash(), cashBefore - faceValue, "Cash should decrease by face value");
+        assertEq(bondMMA.pvBonds(), pvBondsBefore + faceValue, "PV bonds should increase");
+
+        // Check user received face value
+        assertEq(stablecoin.balanceOf(user1), userBalBefore + faceValue, "User should receive face value");
+
+        console2.log("Redeem successful");
+        console2.log("Face value redeemed:", faceValue);
     }
 
-    function testRepay_RevertsNotImplemented() public {
+    function testRedeem_RevertsIfNotOwner() public {
         bondMMA.initialize(INITIAL_CASH, address(oracle), address(stablecoin));
 
-        vm.expectRevert(bytes("Not yet implemented"));
-        bondMMA.repay(1);
+        uint256 lendAmount = 10_000 ether;
+        uint256 maturity = block.timestamp + 90 days;
+
+        // User1 lends
+        stablecoin.mint(user1, lendAmount);
+        vm.prank(user1);
+        stablecoin.approve(address(bondMMA), lendAmount);
+        vm.prank(user1);
+        uint256 positionId = bondMMA.lend(lendAmount, maturity);
+
+        // Warp to maturity
+        vm.warp(maturity);
+
+        // User2 tries to redeem
+        vm.prank(user2);
+        vm.expectRevert(bytes("Not position owner"));
+        bondMMA.redeem(positionId);
+    }
+
+    function testRedeem_RevertsIfNotMature() public {
+        bondMMA.initialize(INITIAL_CASH, address(oracle), address(stablecoin));
+
+        uint256 lendAmount = 10_000 ether;
+        uint256 maturity = block.timestamp + 90 days;
+
+        // User1 lends
+        stablecoin.mint(user1, lendAmount);
+        vm.prank(user1);
+        stablecoin.approve(address(bondMMA), lendAmount);
+        vm.prank(user1);
+        uint256 positionId = bondMMA.lend(lendAmount, maturity);
+
+        // Try to redeem before maturity
+        vm.prank(user1);
+        vm.expectRevert(bytes("Not yet mature"));
+        bondMMA.redeem(positionId);
+    }
+
+    function testRedeem_RevertsIfBorrowPosition() public {
+        bondMMA.initialize(INITIAL_CASH, address(oracle), address(stablecoin));
+
+        uint256 borrowAmount = 10_000 ether;
+        uint256 collateral = 15_000 ether;
+        uint256 maturity = block.timestamp + 90 days;
+
+        // User1 borrows
+        stablecoin.mint(user1, collateral);
+        vm.prank(user1);
+        stablecoin.approve(address(bondMMA), collateral);
+        vm.prank(user1);
+        uint256 positionId = bondMMA.borrow(borrowAmount, maturity, collateral);
+
+        // Warp to maturity
+        vm.warp(maturity);
+
+        // Try to redeem a borrow position
+        vm.prank(user1);
+        vm.expectRevert(bytes("Cannot redeem borrow position"));
+        bondMMA.redeem(positionId);
+    }
+
+    /*//////////////////////////////////////////////////////////////
+                        REPAY TESTS
+    //////////////////////////////////////////////////////////////*/
+
+    function testRepay_AtMaturity() public {
+        bondMMA.initialize(INITIAL_CASH, address(oracle), address(stablecoin));
+
+        uint256 borrowAmount = 10_000 ether;
+        uint256 collateral = 15_000 ether;
+        uint256 maturity = block.timestamp + 90 days;
+
+        // Setup: User borrows
+        stablecoin.mint(user1, collateral);
+        vm.prank(user1);
+        stablecoin.approve(address(bondMMA), collateral);
+
+        vm.prank(user1);
+        uint256 positionId = bondMMA.borrow(borrowAmount, maturity, collateral);
+
+        IBondMMA.Position memory posBeforeRepay = bondMMA.getPosition(positionId);
+        uint256 faceValue = posBeforeRepay.faceValue;
+
+        // Warp to maturity
+        vm.warp(maturity);
+
+        // Mint tokens for repayment
+        stablecoin.mint(user1, faceValue);
+        vm.prank(user1);
+        stablecoin.approve(address(bondMMA), faceValue);
+
+        // Record state before repay
+        uint256 cashBefore = bondMMA.cash();
+        uint256 pvBondsBefore = bondMMA.pvBonds();
+
+        // Repay
+        vm.prank(user1);
+        bondMMA.repay(positionId);
+
+        // Check position burned
+        IBondMMA.Position memory posAfter = bondMMA.getPosition(positionId);
+        assertFalse(posAfter.isActive, "Position should be inactive");
+
+        // Check state updates (at maturity, repay face value)
+        assertEq(bondMMA.cash(), cashBefore + faceValue, "Cash should increase by face value");
+        assertEq(bondMMA.pvBonds(), pvBondsBefore - faceValue, "PV bonds should decrease");
+        assertEq(bondMMA.netLiabilities(), 0, "Liabilities should be zero (only one borrow)");
+
+        // Check user received collateral back
+        // User should have: original borrowed amount (still in wallet) + collateral returned
+        assertEq(stablecoin.balanceOf(user1), borrowAmount + collateral, "User should have borrowed funds + collateral");
+
+        console2.log("Repay at maturity successful");
+        console2.log("Face value repaid:", faceValue);
+    }
+
+    function testRepay_BeforeMaturity() public {
+        bondMMA.initialize(INITIAL_CASH, address(oracle), address(stablecoin));
+
+        uint256 borrowAmount = 10_000 ether;
+        uint256 collateral = 15_000 ether;
+        uint256 maturity = block.timestamp + 90 days;
+
+        // Setup: User borrows
+        stablecoin.mint(user1, collateral);
+        vm.prank(user1);
+        stablecoin.approve(address(bondMMA), collateral);
+
+        vm.prank(user1);
+        uint256 positionId = bondMMA.borrow(borrowAmount, maturity, collateral);
+
+        IBondMMA.Position memory posBeforeRepay = bondMMA.getPosition(positionId);
+        uint256 faceValue = posBeforeRepay.faceValue;
+
+        // Warp to halfway to maturity
+        vm.warp(block.timestamp + 45 days);
+
+        // Mint tokens for repayment (extra to be safe)
+        stablecoin.mint(user1, faceValue);
+        vm.prank(user1);
+        stablecoin.approve(address(bondMMA), faceValue);
+
+        // Record state before repay
+        uint256 cashBefore = bondMMA.cash();
+        uint256 pvBondsBefore = bondMMA.pvBonds();
+
+        // Repay
+        vm.prank(user1);
+        bondMMA.repay(positionId);
+
+        // Check position burned
+        IBondMMA.Position memory posAfter = bondMMA.getPosition(positionId);
+        assertFalse(posAfter.isActive, "Position should be inactive");
+
+        // Check state updates (before maturity, repay PV < face value)
+        assertGt(bondMMA.cash(), cashBefore, "Cash should increase");
+        assertLt(bondMMA.pvBonds(), pvBondsBefore, "PV bonds should decrease");
+
+        // Repayment should be less than face value when before maturity
+        uint256 actualRepayment = bondMMA.cash() - cashBefore;
+        assertLt(actualRepayment, faceValue, "Repayment should be less than face value before maturity");
+
+        // Check user received collateral back
+        assertGt(stablecoin.balanceOf(user1), collateral, "User should have collateral + unused tokens");
+
+        console2.log("Repay before maturity successful");
+        console2.log("Face value:", faceValue);
+        console2.log("Actual repayment (PV):", actualRepayment);
+    }
+
+    function testRepay_RevertsIfNotOwner() public {
+        bondMMA.initialize(INITIAL_CASH, address(oracle), address(stablecoin));
+
+        uint256 borrowAmount = 10_000 ether;
+        uint256 collateral = 15_000 ether;
+        uint256 maturity = block.timestamp + 90 days;
+
+        // User1 borrows
+        stablecoin.mint(user1, collateral);
+        vm.prank(user1);
+        stablecoin.approve(address(bondMMA), collateral);
+        vm.prank(user1);
+        uint256 positionId = bondMMA.borrow(borrowAmount, maturity, collateral);
+
+        // User2 tries to repay
+        vm.prank(user2);
+        vm.expectRevert(bytes("Not position owner"));
+        bondMMA.repay(positionId);
+    }
+
+    function testRepay_RevertsIfLendPosition() public {
+        bondMMA.initialize(INITIAL_CASH, address(oracle), address(stablecoin));
+
+        uint256 lendAmount = 10_000 ether;
+        uint256 maturity = block.timestamp + 90 days;
+
+        // User1 lends
+        stablecoin.mint(user1, lendAmount);
+        vm.prank(user1);
+        stablecoin.approve(address(bondMMA), lendAmount);
+        vm.prank(user1);
+        uint256 positionId = bondMMA.lend(lendAmount, maturity);
+
+        // Try to repay a lending position
+        vm.prank(user1);
+        vm.expectRevert(bytes("Not a borrow position"));
+        bondMMA.repay(positionId);
     }
 }
