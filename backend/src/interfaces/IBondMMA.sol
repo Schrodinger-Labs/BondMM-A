@@ -19,6 +19,7 @@ interface IBondMMA {
      * @param maturity Timestamp when position matures
      * @param collateral Amount of collateral deposited (only for borrow positions)
      * @param initialPV Initial present value when position was created (for tracking)
+     * @param createdAt Timestamp when position was created (for liability decay calculation)
      * @param isBorrow True if this is a borrow position, false if lending
      * @param isActive True if position is still active, false if closed
      */
@@ -28,6 +29,7 @@ interface IBondMMA {
         uint256 maturity;
         uint256 collateral;
         uint256 initialPV;
+        uint256 createdAt;
         bool isBorrow;
         bool isActive;
     }
@@ -94,6 +96,24 @@ interface IBondMMA {
      * @param collateralReturned Amount of collateral returned
      */
     event Repay(uint256 indexed positionId, address indexed owner, uint256 repayAmount, uint256 collateralReturned);
+
+    /**
+     * @notice Emitted when a borrow position is liquidated
+     * @param positionId ID of the liquidated position
+     * @param borrower Address of the borrower
+     * @param liquidator Address that triggered liquidation
+     * @param debtOwed Total debt owed (face value + penalty)
+     * @param collateralSeized Amount of collateral seized
+     * @param penaltyCharged Penalty amount charged (5% of debt)
+     */
+    event Liquidated(
+        uint256 indexed positionId,
+        address indexed borrower,
+        address indexed liquidator,
+        uint256 debtOwed,
+        uint256 collateralSeized,
+        uint256 penaltyCharged
+    );
 
     /*//////////////////////////////////////////////////////////////
                             VIEW FUNCTIONS
