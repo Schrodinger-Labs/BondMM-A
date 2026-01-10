@@ -100,6 +100,7 @@ contract BondMMATest is Test {
     address public owner;
     address public user1;
     address public user2;
+    address public user3;
 
     uint256 constant INITIAL_CASH = 100_000 ether; // 100,000 DAI
     uint256 constant ANCHOR_RATE = 0.05 ether; // 5%
@@ -109,6 +110,7 @@ contract BondMMATest is Test {
         owner = address(this);
         user1 = address(0x1);
         user2 = address(0x2);
+        user3 = address(0x3);
 
         // Deploy contracts
         bondMMA = new BondMMA();
@@ -866,5 +868,147 @@ contract BondMMATest is Test {
         vm.prank(user1);
         vm.expectRevert(bytes("Not a borrow position"));
         bondMMA.repay(positionId);
+    }
+
+    /*//////////////////////////////////////////////////////////////
+                        LIQUIDATION TESTS
+    //////////////////////////////////////////////////////////////*/
+
+    /// @notice Test successful liquidation after grace period
+    function testLiquidate_AfterGracePeriod() public {
+        bondMMA.initialize(INITIAL_CASH, address(oracle), address(stablecoin));
+
+        // Mint and approve collateral for user1
+        stablecoin.mint(user1, 15_000 ether);
+        vm.prank(user1);
+        stablecoin.approve(address(bondMMA), 15_000 ether);
+
+        // User borrows
+        vm.prank(user1);
+        bondMMA.borrow(10_000 ether, block.timestamp + 90 days, 15_000 ether);
+
+        // Warp past maturity + grace period
+        vm.warp(block.timestamp + 90 days + 24 hours + 1 seconds);
+        oracle.updateRate(ANCHOR_RATE); // Update oracle after time warp
+
+        uint256 poolCashBefore = bondMMA.cash();
+
+        // Anyone can liquidate
+        vm.prank(user2);
+        bondMMA.liquidate(1);
+
+        // Position should be inactive
+        IBondMMA.Position memory pos = bondMMA.getPosition(1);
+        assertFalse(pos.isActive, "Position should be liquidated");
+
+        // Pool should have received collateral
+        uint256 poolCashAfter = bondMMA.cash();
+        assertEq(poolCashAfter, poolCashBefore + 15_000 ether, "Pool should receive collateral");
+
+        console2.log("Liquidation successful after grace period");
+    }
+
+    /// @notice Test liquidation before grace period fails
+    function testLiquidate_RevertsBeforeGracePeriod() public {
+        bondMMA.initialize(INITIAL_CASH, address(oracle), address(stablecoin));
+
+        // Mint and approve collateral for user1
+        stablecoin.mint(user1, 15_000 ether);
+        vm.prank(user1);
+        stablecoin.approve(address(bondMMA), 15_000 ether);
+
+        // User borrows
+        vm.prank(user1);
+        bondMMA.borrow(10_000 ether, block.timestamp + 90 days, 15_000 ether);
+
+        // Warp to just past maturity, but within grace period
+        vm.warp(block.timestamp + 90 days + 1 hours);
+        oracle.updateRate(ANCHOR_RATE);
+
+        // Should revert
+        vm.prank(user2);
+        vm.expectRevert("Grace period not expired");
+        bondMMA.liquidate(1);
+    }
+
+    /// @notice Test liquidation of lending position fails
+    function testLiquidate_RevertsIfNotBorrowPosition() public {
+        bondMMA.initialize(INITIAL_CASH, address(oracle), address(stablecoin));
+
+        // Mint and approve cash for lending
+        stablecoin.mint(user1, 10_000 ether);
+        vm.prank(user1);
+        stablecoin.approve(address(bondMMA), 10_000 ether);
+
+        // User lends
+        vm.prank(user1);
+        bondMMA.lend(10_000 ether, block.timestamp + 90 days);
+
+        // Warp past maturity + grace period
+        vm.warp(block.timestamp + 90 days + 24 hours + 1 seconds);
+        oracle.updateRate(ANCHOR_RATE);
+
+        // Should revert
+        vm.prank(user2);
+        vm.expectRevert("Not a borrow position");
+        bondMMA.liquidate(1);
+    }
+
+    /// @notice Test liquidation reduces liabilities correctly
+    function testLiquidate_ReducesLiabilities() public {
+        bondMMA.initialize(INITIAL_CASH, address(oracle), address(stablecoin));
+
+        // Mint and approve collateral for user1
+        stablecoin.mint(user1, 15_000 ether);
+        vm.prank(user1);
+        stablecoin.approve(address(bondMMA), 15_000 ether);
+
+        // User borrows
+        vm.prank(user1);
+        bondMMA.borrow(10_000 ether, block.timestamp + 90 days, 15_000 ether);
+
+        uint256 liabilitiesAfterBorrow = bondMMA.netLiabilities();
+        assertGt(liabilitiesAfterBorrow, 0, "Should have liabilities after borrow");
+
+        // Warp past grace period
+        vm.warp(block.timestamp + 90 days + 24 hours + 1 seconds);
+        oracle.updateRate(ANCHOR_RATE);
+
+        // Liquidate
+        vm.prank(user2);
+        bondMMA.liquidate(1);
+
+        // Net liabilities should be reduced
+        uint256 liabilitiesAfterLiquidation = bondMMA.netLiabilities();
+        assertLt(liabilitiesAfterLiquidation, liabilitiesAfterBorrow, "Liabilities should decrease");
+
+        console2.log("Liabilities reduced correctly after liquidation");
+    }
+
+    /// @notice Test liquidation is permissionless (anyone can liquidate)
+    function testLiquidate_Permissionless() public {
+        bondMMA.initialize(INITIAL_CASH, address(oracle), address(stablecoin));
+
+        // Mint and approve collateral for user1
+        stablecoin.mint(user1, 15_000 ether);
+        vm.prank(user1);
+        stablecoin.approve(address(bondMMA), 15_000 ether);
+
+        // User 1 borrows
+        vm.prank(user1);
+        bondMMA.borrow(10_000 ether, block.timestamp + 90 days, 15_000 ether);
+
+        // Warp past grace period
+        vm.warp(block.timestamp + 90 days + 24 hours + 1 seconds);
+        oracle.updateRate(ANCHOR_RATE);
+
+        // User 3 (unrelated party) can liquidate
+        vm.prank(user3);
+        bondMMA.liquidate(1);
+
+        IBondMMA.Position memory pos = bondMMA.getPosition(1);
+        assertFalse(pos.isActive, "Position should be liquidated by any user");
+
+        console2.log("Liquidation is permissionless");
     }
 }
