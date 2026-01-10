@@ -530,11 +530,6 @@ contract BondMMATest is Test {
 
         uint256 lendAmount = 10_000 ether;
         uint256 maturity = block.timestamp + 90 days;
-        uint256 timeToMaturity = maturity - block.timestamp;
-
-        // Calculate C before
-        uint256 anchorRate = oracle.getRate();
-        uint256 cBefore = bondMMA.pvBonds(); // Simplified check
 
         // Mint and approve
         stablecoin.mint(user1, lendAmount);

@@ -233,8 +233,8 @@ contract BondMMA is IBondMMA, ReentrancyGuard, Ownable {
 
         // Pool's bond position decreases (negative lending = liability to pay bonds)
         // pvBonds is stored in present value terms
-        uint256 deltaPV = (deltaX * price) / PRECISION;
-        pvBonds -= deltaPV;
+        uint256 DeltaPV = (deltaX * price) / PRECISION;
+        pvBonds -= DeltaPV;
 
         // Step 4: Transfer cash from user to pool
         stablecoin.safeTransferFrom(msg.sender, address(this), amount);
@@ -302,9 +302,9 @@ contract BondMMA is IBondMMA, ReentrancyGuard, Ownable {
 
         // Pool's bond position increases (borrower owes pool)
         // pvBonds and netLiabilities stored in present value terms
-        uint256 deltaPV = (deltaX * price) / PRECISION;
-        pvBonds += deltaPV;
-        netLiabilities += deltaPV;
+        uint256 DeltaPV = (deltaX * price) / PRECISION;
+        pvBonds += DeltaPV;
+        netLiabilities += DeltaPV;
 
         // Step 5: Transfer collateral from user to pool
         stablecoin.safeTransferFrom(msg.sender, address(this), collateral);
@@ -331,6 +331,7 @@ contract BondMMA is IBondMMA, ReentrancyGuard, Ownable {
      * @param positionId ID of the position to redeem
      */
     function redeem(uint256 positionId) external nonReentrant onlyInitialized {
+        positionId; // Silence unused variable warning
         // To be implemented in Phase 5
         revert("Not yet implemented");
     }
@@ -340,6 +341,7 @@ contract BondMMA is IBondMMA, ReentrancyGuard, Ownable {
      * @param positionId ID of the position to repay
      */
     function repay(uint256 positionId) external nonReentrant onlyInitialized {
+        positionId; // Silence unused variable warning
         // To be implemented in Phase 5
         revert("Not yet implemented");
     }
