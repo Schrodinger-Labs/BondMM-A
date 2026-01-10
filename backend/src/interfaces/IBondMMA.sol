@@ -17,15 +17,17 @@ interface IBondMMA {
      * @param owner Address that owns this position
      * @param faceValue Bond face value (amount to be repaid/received at maturity)
      * @param maturity Timestamp when position matures
+     * @param collateral Amount of collateral deposited (only for borrow positions)
+     * @param initialPV Initial present value when position was created (for tracking)
      * @param isBorrow True if this is a borrow position, false if lending
      * @param isActive True if position is still active, false if closed
-     * @param collateral Amount of collateral deposited (only for borrow positions)
      */
     struct Position {
         address owner;
         uint256 faceValue;
         uint256 maturity;
         uint256 collateral;
+        uint256 initialPV;
         bool isBorrow;
         bool isActive;
     }
