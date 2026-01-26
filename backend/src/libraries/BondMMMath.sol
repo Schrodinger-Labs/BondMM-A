@@ -32,6 +32,12 @@ library BondMMMath {
     /// @notice Minimum time to maturity (prevent division by zero)
     uint256 public constant MIN_TIME = 1 hours;
 
+    /// @notice Minimum rate bound (0% - rates cannot be negative)
+    uint256 public constant MIN_RATE = 0;
+
+    /// @notice Maximum rate bound (50% - prevent extreme rates)
+    uint256 public constant MAX_RATE = 500000000000000000; // 0.5e18 = 50%
+
     /**
      * @notice Calculate α = 1/(1 + κt)
      * @dev α controls the curvature of the bonding curve
@@ -167,9 +173,26 @@ library BondMMMath {
 
         // r = κ ln(X/y) + r*
         // If ln was negative, subtract instead of add
-        UD60x18 rate = isNegative ? rStar.sub(kappaLn) : rStar.add(kappaLn);
+        uint256 calculatedRate;
+        if (isNegative) {
+            // Check for underflow: if kappaLn > rStar, rate would be negative
+            if (kappaLn.intoUint256() >= rStar.intoUint256()) {
+                calculatedRate = MIN_RATE; // Floor at 0%
+            } else {
+                calculatedRate = rStar.sub(kappaLn).intoUint256();
+            }
+        } else {
+            calculatedRate = rStar.add(kappaLn).intoUint256();
+        }
 
-        return rate.intoUint256();
+        // Apply rate bounds
+        if (calculatedRate < MIN_RATE) {
+            calculatedRate = MIN_RATE;
+        } else if (calculatedRate > MAX_RATE) {
+            calculatedRate = MAX_RATE;
+        }
+
+        return calculatedRate;
     }
 
     /**
