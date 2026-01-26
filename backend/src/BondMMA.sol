@@ -3,6 +3,7 @@ pragma solidity ^0.8.20;
 
 import {ReentrancyGuard} from "@openzeppelin/contracts/utils/ReentrancyGuard.sol";
 import {Ownable} from "@openzeppelin/contracts/access/Ownable.sol";
+import {Pausable} from "@openzeppelin/contracts/utils/Pausable.sol";
 import {IERC20} from "@openzeppelin/contracts/token/ERC20/IERC20.sol";
 import {SafeERC20} from "@openzeppelin/contracts/token/ERC20/utils/SafeERC20.sol";
 import {UD60x18, ud, intoUint256} from "@prb/math/src/UD60x18.sol";
@@ -23,7 +24,7 @@ import {IOracle} from "./interfaces/IOracle.sol";
  *
  * Solvency invariant: E = y + L ≥ 0.99·y₀
  */
-contract BondMMA is IBondMMA, ReentrancyGuard, Ownable {
+contract BondMMA is IBondMMA, ReentrancyGuard, Ownable, Pausable {
     using SafeERC20 for IERC20;
     using {intoUint256} for UD60x18;
 
@@ -89,6 +90,12 @@ contract BondMMA is IBondMMA, ReentrancyGuard, Ownable {
 
     /// @notice Precision scale
     uint256 public constant PRECISION = 1e18;
+
+    /// @notice Fallback rate when oracle is stale (5% = 0.05e18)
+    uint256 public fallbackRate = 50000000000000000;
+
+    /// @notice Event emitted when fallback rate is used
+    event FallbackRateUsed(uint256 fallbackRate, uint256 timestamp);
 
     /*//////////////////////////////////////////////////////////////
                               CONSTRUCTOR
@@ -220,6 +227,29 @@ contract BondMMA is IBondMMA, ReentrancyGuard, Ownable {
         lastUpdateTime = block.timestamp;
     }
 
+    /**
+     * @notice Get anchor rate safely, using fallback if oracle is stale
+     * @dev For use in functions that should not revert due to oracle issues (like repay)
+     * @return rate The anchor rate (from oracle or fallback)
+     */
+    function getSafeRate() internal returns (uint256) {
+        if (oracle.isStale()) {
+            emit FallbackRateUsed(fallbackRate, block.timestamp);
+            return fallbackRate;
+        }
+        return oracle.getRate();
+    }
+
+    /**
+     * @notice Set the fallback rate used when oracle is stale
+     * @dev Only owner can update the fallback rate
+     * @param _fallbackRate New fallback rate (scaled by 1e18)
+     */
+    function setFallbackRate(uint256 _fallbackRate) external onlyOwner {
+        require(_fallbackRate <= 200000000000000000, "Fallback rate too high"); // Max 20%
+        fallbackRate = _fallbackRate;
+    }
+
     /*//////////////////////////////////////////////////////////////
                             VIEW FUNCTIONS
     //////////////////////////////////////////////////////////////*/
@@ -265,6 +295,7 @@ contract BondMMA is IBondMMA, ReentrancyGuard, Ownable {
         external
         nonReentrant
         onlyInitialized
+        whenNotPaused
         requireSolvency
         returns (uint256 positionId)
     {
@@ -333,6 +364,7 @@ contract BondMMA is IBondMMA, ReentrancyGuard, Ownable {
         external
         nonReentrant
         onlyInitialized
+        whenNotPaused
         returns (uint256 positionId)
     {
         // Update liabilities with time decay before any state changes
@@ -462,8 +494,8 @@ contract BondMMA is IBondMMA, ReentrancyGuard, Ownable {
             // Before maturity: repay present value
             timeToMaturity = position.maturity - block.timestamp;
 
-            // Calculate current rate and price
-            uint256 anchorRate = oracle.getRate();
+            // Calculate current rate and price (use safe rate for oracle failure handling)
+            uint256 anchorRate = getSafeRate();
             uint256 currentRate = BondMMMath.calculateRate(pvBonds, cash, anchorRate);
             uint256 price = BondMMMath.calculatePrice(timeToMaturity, currentRate);
 
@@ -475,7 +507,7 @@ contract BondMMA is IBondMMA, ReentrancyGuard, Ownable {
         // Calculate grown liability value to subtract from netLiabilities
         // Liability has grown since creation: currentLiability = initialPV * e^(r·Δt)
         uint256 timeElapsed = block.timestamp - position.createdAt;
-        uint256 currentAnchorRate = oracle.getRate();
+        uint256 currentAnchorRate = getSafeRate();
         uint256 avgRate = BondMMMath.calculateRate(pvBonds, cash, currentAnchorRate);
         uint256 exponent = (avgRate * timeElapsed) / BondMMMath.SECONDS_PER_YEAR;
         UD60x18 growthFactor = ud(exponent).exp();
@@ -515,7 +547,7 @@ contract BondMMA is IBondMMA, ReentrancyGuard, Ownable {
      * 5. Burn position
      * 6. Emit Liquidated event
      */
-    function liquidate(uint256 positionId) external nonReentrant onlyInitialized {
+    function liquidate(uint256 positionId) external nonReentrant onlyInitialized whenNotPaused {
         // Update liabilities with time decay before any state changes
         updateLiabilities();
 
@@ -539,9 +571,9 @@ contract BondMMA is IBondMMA, ReentrancyGuard, Ownable {
         uint256 collateralSeized = position.collateral;
 
         // Calculate grown liability value to subtract from netLiabilities
-        // Same calculation as in repay()
+        // Same calculation as in repay() - use safe rate for oracle failure handling
         uint256 timeElapsed = block.timestamp - position.createdAt;
-        uint256 currentAnchorRate = oracle.getRate();
+        uint256 currentAnchorRate = getSafeRate();
         uint256 avgRate = BondMMMath.calculateRate(pvBonds, cash, currentAnchorRate);
         uint256 exponent = (avgRate * timeElapsed) / BondMMMath.SECONDS_PER_YEAR;
         UD60x18 growthFactor = ud(exponent).exp();
@@ -563,5 +595,25 @@ contract BondMMA is IBondMMA, ReentrancyGuard, Ownable {
             collateralSeized,
             penalty
         );
+    }
+
+    /*//////////////////////////////////////////////////////////////
+                        EMERGENCY PAUSE FUNCTIONS
+    //////////////////////////////////////////////////////////////*/
+
+    /**
+     * @notice Pause the contract - stops new lend, borrow, and liquidate operations
+     * @dev Only owner can pause. Redeem and repay still work to allow position exits.
+     */
+    function pause() external onlyOwner {
+        _pause();
+    }
+
+    /**
+     * @notice Unpause the contract - resume normal operations
+     * @dev Only owner can unpause
+     */
+    function unpause() external onlyOwner {
+        _unpause();
     }
 }
