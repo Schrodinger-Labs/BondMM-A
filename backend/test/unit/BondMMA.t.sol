@@ -1011,4 +1011,221 @@ contract BondMMATest is Test {
 
         console2.log("Liquidation is permissionless");
     }
+
+    /*//////////////////////////////////////////////////////////////
+                        EMERGENCY PAUSE TESTS
+    //////////////////////////////////////////////////////////////*/
+
+    /// @notice Test pause() can only be called by owner
+    function testPause_OnlyOwner() public {
+        bondMMA.initialize(INITIAL_CASH, address(oracle), address(stablecoin));
+
+        // Non-owner cannot pause
+        vm.prank(user1);
+        vm.expectRevert();
+        bondMMA.pause();
+
+        // Owner can pause
+        bondMMA.pause();
+        assertTrue(bondMMA.paused(), "Contract should be paused");
+    }
+
+    /// @notice Test lend reverts when paused
+    function testLend_RevertsWhenPaused() public {
+        bondMMA.initialize(INITIAL_CASH, address(oracle), address(stablecoin));
+
+        // Pause the contract
+        bondMMA.pause();
+
+        // Mint tokens to user
+        stablecoin.mint(user1, 10_000 ether);
+        vm.prank(user1);
+        stablecoin.approve(address(bondMMA), 10_000 ether);
+
+        // Lend should revert
+        vm.prank(user1);
+        vm.expectRevert();
+        bondMMA.lend(10_000 ether, block.timestamp + 90 days);
+    }
+
+    /// @notice Test borrow reverts when paused
+    function testBorrow_RevertsWhenPaused() public {
+        bondMMA.initialize(INITIAL_CASH, address(oracle), address(stablecoin));
+
+        // Pause the contract
+        bondMMA.pause();
+
+        // Mint tokens to user
+        stablecoin.mint(user1, 15_000 ether);
+        vm.prank(user1);
+        stablecoin.approve(address(bondMMA), 15_000 ether);
+
+        // Borrow should revert
+        vm.prank(user1);
+        vm.expectRevert();
+        bondMMA.borrow(10_000 ether, block.timestamp + 90 days, 15_000 ether);
+    }
+
+    /// @notice Test redeem still works when paused (for user safety)
+    function testRedeem_WorksWhenPaused() public {
+        bondMMA.initialize(INITIAL_CASH, address(oracle), address(stablecoin));
+
+        // User lends
+        stablecoin.mint(user1, 10_000 ether);
+        vm.prank(user1);
+        stablecoin.approve(address(bondMMA), 10_000 ether);
+        vm.prank(user1);
+        bondMMA.lend(10_000 ether, block.timestamp + 90 days);
+
+        // Warp to maturity
+        vm.warp(block.timestamp + 90 days);
+        oracle.updateRate(ANCHOR_RATE);
+
+        // Pause the contract
+        bondMMA.pause();
+
+        // Redeem should still work
+        vm.prank(user1);
+        bondMMA.redeem(1);
+
+        IBondMMA.Position memory pos = bondMMA.getPosition(1);
+        assertFalse(pos.isActive, "Position should be redeemed even when paused");
+
+        console2.log("Redeem works when paused");
+    }
+
+    /// @notice Test repay still works when paused (for user safety)
+    function testRepay_WorksWhenPaused() public {
+        bondMMA.initialize(INITIAL_CASH, address(oracle), address(stablecoin));
+
+        // User borrows
+        stablecoin.mint(user1, 25_000 ether);
+        vm.prank(user1);
+        stablecoin.approve(address(bondMMA), 25_000 ether);
+        vm.prank(user1);
+        bondMMA.borrow(10_000 ether, block.timestamp + 90 days, 15_000 ether);
+
+        // Warp to maturity
+        vm.warp(block.timestamp + 90 days);
+        oracle.updateRate(ANCHOR_RATE);
+
+        // Pause the contract
+        bondMMA.pause();
+
+        // Mint more tokens for repayment (face value is higher than borrowed amount)
+        stablecoin.mint(user1, 15_000 ether);
+        vm.prank(user1);
+        stablecoin.approve(address(bondMMA), 15_000 ether);
+
+        // Repay should still work
+        vm.prank(user1);
+        bondMMA.repay(1);
+
+        IBondMMA.Position memory pos = bondMMA.getPosition(1);
+        assertFalse(pos.isActive, "Position should be repaid even when paused");
+
+        console2.log("Repay works when paused");
+    }
+
+    /// @notice Test unpause restores normal operations
+    function testUnpause_RestoresOperations() public {
+        bondMMA.initialize(INITIAL_CASH, address(oracle), address(stablecoin));
+
+        // Pause
+        bondMMA.pause();
+        assertTrue(bondMMA.paused(), "Should be paused");
+
+        // Unpause
+        bondMMA.unpause();
+        assertFalse(bondMMA.paused(), "Should be unpaused");
+
+        // Lend should work again
+        stablecoin.mint(user1, 10_000 ether);
+        vm.prank(user1);
+        stablecoin.approve(address(bondMMA), 10_000 ether);
+        vm.prank(user1);
+        bondMMA.lend(10_000 ether, block.timestamp + 90 days);
+
+        IBondMMA.Position memory pos = bondMMA.getPosition(1);
+        assertTrue(pos.isActive, "Position should be created after unpause");
+
+        console2.log("Unpause restores operations");
+    }
+
+    /*//////////////////////////////////////////////////////////////
+                    ORACLE FAILURE HANDLING TESTS
+    //////////////////////////////////////////////////////////////*/
+
+    /// @notice Test repay works when oracle is stale (uses fallback rate)
+    function testRepay_WorksWhenOracleStale() public {
+        bondMMA.initialize(INITIAL_CASH, address(oracle), address(stablecoin));
+
+        // User borrows
+        stablecoin.mint(user1, 25_000 ether);
+        vm.prank(user1);
+        stablecoin.approve(address(bondMMA), 25_000 ether);
+        vm.prank(user1);
+        bondMMA.borrow(10_000 ether, block.timestamp + 90 days, 15_000 ether);
+
+        // Set oracle as stale (MockOracle uses manual flag)
+        oracle.setStale(true);
+
+        // Verify oracle is stale
+        assertTrue(oracle.isStale(), "Oracle should be stale");
+
+        // Mint more tokens for repayment
+        stablecoin.mint(user1, 15_000 ether);
+        vm.prank(user1);
+        stablecoin.approve(address(bondMMA), 15_000 ether);
+
+        // Repay should still work using fallback rate
+        vm.prank(user1);
+        bondMMA.repay(1);
+
+        IBondMMA.Position memory pos = bondMMA.getPosition(1);
+        assertFalse(pos.isActive, "Position should be repaid even with stale oracle");
+
+        console2.log("Repay works with stale oracle (fallback rate used)");
+    }
+
+    /// @notice Test setFallbackRate only callable by owner
+    function testSetFallbackRate_OnlyOwner() public {
+        bondMMA.initialize(INITIAL_CASH, address(oracle), address(stablecoin));
+
+        // Non-owner cannot set fallback rate
+        vm.prank(user1);
+        vm.expectRevert();
+        bondMMA.setFallbackRate(60000000000000000); // 6%
+
+        // Owner can set fallback rate
+        bondMMA.setFallbackRate(60000000000000000); // 6%
+        assertEq(bondMMA.fallbackRate(), 60000000000000000, "Fallback rate should be updated");
+    }
+
+    /// @notice Test setFallbackRate reverts if rate too high
+    function testSetFallbackRate_RevertsIfTooHigh() public {
+        bondMMA.initialize(INITIAL_CASH, address(oracle), address(stablecoin));
+
+        // Try to set rate above 20% - should revert
+        vm.expectRevert("Fallback rate too high");
+        bondMMA.setFallbackRate(300000000000000000); // 30%
+    }
+
+    /// @notice Test lend still reverts when oracle is stale (safety check)
+    function testLend_RevertsWhenOracleStaleForSafety() public {
+        bondMMA.initialize(INITIAL_CASH, address(oracle), address(stablecoin));
+
+        // Set oracle as stale
+        oracle.setStale(true);
+
+        // Mint tokens
+        stablecoin.mint(user1, 10_000 ether);
+        vm.prank(user1);
+        stablecoin.approve(address(bondMMA), 10_000 ether);
+
+        // Lend should revert when oracle is stale (for safety)
+        vm.prank(user1);
+        vm.expectRevert("Oracle data is stale");
+        bondMMA.lend(10_000 ether, block.timestamp + 90 days);
+    }
 }
