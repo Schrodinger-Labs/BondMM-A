@@ -398,4 +398,53 @@ contract BondMMMathTest is Test {
         console2.log("Gas used for calculateDeltaX:", gasUsed);
         assertLt(gasUsed, 100_000, "calculateDeltaX should use < 100k gas");
     }
+
+    /*//////////////////////////////////////////////////////////////
+                        RATE BOUNDS TESTS
+    //////////////////////////////////////////////////////////////*/
+
+    /// @notice Test that rate is capped at MAX_RATE when X/y ratio is very high
+    function testCalculateRate_CappedAtMax() public pure {
+        // Very high X/y ratio (100x more bonds than cash) would give high rate
+        uint256 highPvBonds = 100_000_000 * PRECISION; // 100M bonds
+        uint256 lowCash = 1_000_000 * PRECISION; // 1M cash (ratio = 100)
+
+        uint256 rate = BondMMMath.calculateRate(highPvBonds, lowCash, ANCHOR_RATE);
+
+        // Rate should be capped at MAX_RATE (50%)
+        uint256 maxRate = 500000000000000000; // 50%
+        assertLe(rate, maxRate, "Rate should be capped at MAX_RATE");
+    }
+
+    /// @notice Test that rate is floored at MIN_RATE when X/y ratio is very low
+    function testCalculateRate_FlooredAtMin() public pure {
+        // Very low X/y ratio (100x more cash than bonds) would give low/negative rate
+        uint256 lowPvBonds = 1_000_000 * PRECISION; // 1M bonds
+        uint256 highCash = 100_000_000 * PRECISION; // 100M cash (ratio = 0.01)
+        uint256 lowAnchorRate = 10000000000000000; // 1% anchor rate
+
+        uint256 rate = BondMMMath.calculateRate(lowPvBonds, highCash, lowAnchorRate);
+
+        // Rate should be floored at MIN_RATE (0%)
+        assertGe(rate, 0, "Rate should be floored at MIN_RATE");
+    }
+
+    /// @notice Test that rate bounds constants are correctly set
+    function testRateBoundsConstants() public pure {
+        uint256 minRate = BondMMMath.MIN_RATE;
+        uint256 maxRate = BondMMMath.MAX_RATE;
+
+        assertEq(minRate, 0, "MIN_RATE should be 0%");
+        assertEq(maxRate, 500000000000000000, "MAX_RATE should be 50%");
+    }
+
+    /// @notice Test rate within normal bounds
+    function testCalculateRate_NormalBoundsRespected() public pure {
+        // Normal balanced ratio
+        uint256 rate = BondMMMath.calculateRate(INITIAL_BONDS, INITIAL_CASH, ANCHOR_RATE);
+        uint256 maxRate = 500000000000000000; // 50%
+
+        assertGe(rate, 0, "Rate should be >= MIN_RATE");
+        assertLe(rate, maxRate, "Rate should be <= MAX_RATE");
+    }
 }
