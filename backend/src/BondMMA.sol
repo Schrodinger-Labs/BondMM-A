@@ -62,6 +62,9 @@ contract BondMMA is IBondMMA, ReentrancyGuard, Ownable, Pausable {
     /// @notice Flag to ensure initialize is called only once
     bool public initialized;
 
+    /// @notice Tracks last trade block for flash loan protection
+    mapping(address => uint256) public lastTradeBlock;
+
     /*//////////////////////////////////////////////////////////////
                                CONSTANTS
     //////////////////////////////////////////////////////////////*/
@@ -174,6 +177,16 @@ contract BondMMA is IBondMMA, ReentrancyGuard, Ownable, Pausable {
      */
     modifier onlyInitialized() {
         require(initialized, "Not initialized");
+        _;
+    }
+
+    /**
+     * @notice Modifier to prevent flash loan attacks
+     * @dev Prevents users from trading twice in the same block
+     */
+    modifier noFlashLoan() {
+        require(lastTradeBlock[msg.sender] < block.number, "Flash loan detected");
+        lastTradeBlock[msg.sender] = block.number;
         _;
     }
 
@@ -296,6 +309,7 @@ contract BondMMA is IBondMMA, ReentrancyGuard, Ownable, Pausable {
         nonReentrant
         onlyInitialized
         whenNotPaused
+        noFlashLoan
         requireSolvency
         returns (uint256 positionId)
     {
@@ -365,6 +379,7 @@ contract BondMMA is IBondMMA, ReentrancyGuard, Ownable, Pausable {
         nonReentrant
         onlyInitialized
         whenNotPaused
+        noFlashLoan
         returns (uint256 positionId)
     {
         // Update liabilities with time decay before any state changes
