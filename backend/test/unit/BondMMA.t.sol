@@ -455,10 +455,16 @@ contract BondMMATest is Test {
         uint256 pos1 = bondMMA.lend(lendAmount, block.timestamp + 30 days);
         IBondMMA.Position memory position1 = bondMMA.getPosition(pos1);
 
+        // Move to next block to avoid flash loan protection
+        vm.roll(block.number + 1);
+
         // Lend at 90 days
         vm.prank(user1);
         uint256 pos2 = bondMMA.lend(lendAmount, block.timestamp + 90 days);
         IBondMMA.Position memory position2 = bondMMA.getPosition(pos2);
+
+        // Move to next block to avoid flash loan protection
+        vm.roll(block.number + 1);
 
         // Lend at 180 days
         vm.prank(user1);
@@ -499,10 +505,16 @@ contract BondMMATest is Test {
         uint256 pos1 = bondMMA.borrow(borrowAmount, block.timestamp + 30 days, collateral);
         IBondMMA.Position memory position1 = bondMMA.getPosition(pos1);
 
+        // Move to next block to avoid flash loan protection
+        vm.roll(block.number + 1);
+
         // Borrow at 90 days
         vm.prank(user1);
         uint256 pos2 = bondMMA.borrow(borrowAmount, block.timestamp + 90 days, collateral);
         IBondMMA.Position memory position2 = bondMMA.getPosition(pos2);
+
+        // Move to next block to avoid flash loan protection
+        vm.roll(block.number + 1);
 
         // Borrow at 180 days
         vm.prank(user1);
@@ -593,9 +605,15 @@ contract BondMMATest is Test {
         vm.prank(user1);
         bondMMA.lend(5_000 ether, block.timestamp + 90 days);
 
+        // Move to next block to avoid flash loan protection
+        vm.roll(block.number + 1);
+
         // User2 borrows
         vm.prank(user2);
         bondMMA.borrow(3_000 ether, block.timestamp + 90 days, 4_500 ether);
+
+        // Move to next block to avoid flash loan protection
+        vm.roll(block.number + 1);
 
         // User1 lends again
         vm.prank(user1);
@@ -1227,5 +1245,112 @@ contract BondMMATest is Test {
         vm.prank(user1);
         vm.expectRevert("Oracle data is stale");
         bondMMA.lend(10_000 ether, block.timestamp + 90 days);
+    }
+
+    /*//////////////////////////////////////////////////////////////
+                    FLASH LOAN PROTECTION TESTS
+    //////////////////////////////////////////////////////////////*/
+
+    /// @notice Test flash loan prevention - cannot lend twice in same block
+    function testFlashLoan_CannotLendTwiceInSameBlock() public {
+        bondMMA.initialize(INITIAL_CASH, address(oracle), address(stablecoin));
+
+        // Mint tokens for user
+        stablecoin.mint(user1, 20_000 ether);
+        vm.prank(user1);
+        stablecoin.approve(address(bondMMA), 20_000 ether);
+
+        // First lend succeeds
+        vm.prank(user1);
+        bondMMA.lend(5_000 ether, block.timestamp + 90 days);
+
+        // Second lend in same block should fail
+        vm.prank(user1);
+        vm.expectRevert("Flash loan detected");
+        bondMMA.lend(5_000 ether, block.timestamp + 90 days);
+    }
+
+    /// @notice Test flash loan prevention - cannot borrow twice in same block
+    function testFlashLoan_CannotBorrowTwiceInSameBlock() public {
+        bondMMA.initialize(INITIAL_CASH, address(oracle), address(stablecoin));
+
+        // Mint collateral for user
+        stablecoin.mint(user1, 30_000 ether);
+        vm.prank(user1);
+        stablecoin.approve(address(bondMMA), 30_000 ether);
+
+        // First borrow succeeds
+        vm.prank(user1);
+        bondMMA.borrow(5_000 ether, block.timestamp + 90 days, 7_500 ether);
+
+        // Second borrow in same block should fail
+        vm.prank(user1);
+        vm.expectRevert("Flash loan detected");
+        bondMMA.borrow(5_000 ether, block.timestamp + 90 days, 7_500 ether);
+    }
+
+    /// @notice Test flash loan prevention - cannot lend then borrow in same block
+    function testFlashLoan_CannotLendThenBorrowSameBlock() public {
+        bondMMA.initialize(INITIAL_CASH, address(oracle), address(stablecoin));
+
+        // Mint tokens for user
+        stablecoin.mint(user1, 25_000 ether);
+        vm.prank(user1);
+        stablecoin.approve(address(bondMMA), 25_000 ether);
+
+        // First lend succeeds
+        vm.prank(user1);
+        bondMMA.lend(5_000 ether, block.timestamp + 90 days);
+
+        // Borrow in same block should fail (same user)
+        vm.prank(user1);
+        vm.expectRevert("Flash loan detected");
+        bondMMA.borrow(5_000 ether, block.timestamp + 90 days, 7_500 ether);
+    }
+
+    /// @notice Test different users can trade in same block
+    function testFlashLoan_DifferentUsersCanTradeSameBlock() public {
+        bondMMA.initialize(INITIAL_CASH, address(oracle), address(stablecoin));
+
+        // Mint tokens for both users
+        stablecoin.mint(user1, 10_000 ether);
+        stablecoin.mint(user2, 15_000 ether);
+        vm.prank(user1);
+        stablecoin.approve(address(bondMMA), 10_000 ether);
+        vm.prank(user2);
+        stablecoin.approve(address(bondMMA), 15_000 ether);
+
+        // User1 lends
+        vm.prank(user1);
+        bondMMA.lend(5_000 ether, block.timestamp + 90 days);
+
+        // User2 can also lend in same block (different user)
+        vm.prank(user2);
+        bondMMA.borrow(5_000 ether, block.timestamp + 90 days, 7_500 ether);
+
+        console2.log("Different users can trade in same block");
+    }
+
+    /// @notice Test user can trade again in next block
+    function testFlashLoan_CanTradeInNextBlock() public {
+        bondMMA.initialize(INITIAL_CASH, address(oracle), address(stablecoin));
+
+        // Mint tokens for user
+        stablecoin.mint(user1, 20_000 ether);
+        vm.prank(user1);
+        stablecoin.approve(address(bondMMA), 20_000 ether);
+
+        // First lend
+        vm.prank(user1);
+        bondMMA.lend(5_000 ether, block.timestamp + 90 days);
+
+        // Move to next block
+        vm.roll(block.number + 1);
+
+        // Second lend in next block succeeds
+        vm.prank(user1);
+        bondMMA.lend(5_000 ether, block.timestamp + 90 days);
+
+        console2.log("User can trade in next block");
     }
 }
