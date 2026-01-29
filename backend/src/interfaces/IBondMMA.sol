@@ -116,6 +116,31 @@ interface IBondMMA {
     );
 
     /*//////////////////////////////////////////////////////////////
+                        ADMIN CONTROL EVENTS
+    //////////////////////////////////////////////////////////////*/
+
+    /// @notice Emitted when minimum maturity is updated
+    event MinMaturityUpdated(uint256 newMinMaturity);
+
+    /// @notice Emitted when maximum maturity is updated
+    event MaxMaturityUpdated(uint256 newMaxMaturity);
+
+    /// @notice Emitted when collateral ratio is updated
+    event CollateralRatioUpdated(uint256 newCollateralRatio);
+
+    /// @notice Emitted when solvency threshold is updated
+    event SolvencyThresholdUpdated(uint256 newSolvencyThreshold);
+
+    /// @notice Emitted when grace period is updated
+    event GracePeriodUpdated(uint256 newGracePeriod);
+
+    /// @notice Emitted when liquidation penalty is updated
+    event LiquidationPenaltyUpdated(uint256 newLiquidationPenalty);
+
+    /// @notice Emitted when oracle is updated
+    event OracleUpdated(address newOracle);
+
+    /*//////////////////////////////////////////////////////////////
                             VIEW FUNCTIONS
     //////////////////////////////////////////////////////////////*/
 
