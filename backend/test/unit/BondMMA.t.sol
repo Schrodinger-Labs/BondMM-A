@@ -258,10 +258,10 @@ contract BondMMATest is Test {
     function testConstants() public view {
         assertEq(bondMMA.KAPPA(), 20, "KAPPA should be 20");
         assertEq(bondMMA.KAPPA_SCALE(), 1000, "KAPPA_SCALE should be 1000");
-        assertEq(bondMMA.MIN_MATURITY(), 30 days, "MIN_MATURITY should be 30 days");
-        assertEq(bondMMA.MAX_MATURITY(), 365 days, "MAX_MATURITY should be 365 days");
-        assertEq(bondMMA.COLLATERAL_RATIO(), 150, "COLLATERAL_RATIO should be 150%");
-        assertEq(bondMMA.SOLVENCY_THRESHOLD(), 99, "SOLVENCY_THRESHOLD should be 99%");
+        assertEq(bondMMA.minMaturity(), 30 days, "MIN_MATURITY should be 30 days");
+        assertEq(bondMMA.maxMaturity(), 365 days, "MAX_MATURITY should be 365 days");
+        assertEq(bondMMA.collateralRatio(), 150, "COLLATERAL_RATIO should be 150%");
+        assertEq(bondMMA.solvencyThreshold(), 99, "SOLVENCY_THRESHOLD should be 99%");
         assertEq(bondMMA.PRECISION(), 1e18, "PRECISION should be 1e18");
 
         console2.log("All constants verified");
@@ -1352,5 +1352,223 @@ contract BondMMATest is Test {
         bondMMA.lend(5_000 ether, block.timestamp + 90 days);
 
         console2.log("User can trade in next block");
+    }
+
+    /*//////////////////////////////////////////////////////////////
+                    ADMIN CONTROL TESTS
+    //////////////////////////////////////////////////////////////*/
+
+    /// @notice Test setMinMaturity only callable by owner
+    function testSetMinMaturity_OnlyOwner() public {
+        bondMMA.initialize(INITIAL_CASH, address(oracle), address(stablecoin));
+
+        // Non-owner cannot set
+        vm.prank(user1);
+        vm.expectRevert();
+        bondMMA.setMinMaturity(7 days);
+
+        // Owner can set
+        bondMMA.setMinMaturity(7 days);
+        assertEq(bondMMA.minMaturity(), 7 days, "minMaturity should be updated");
+    }
+
+    /// @notice Test setMinMaturity respects bounds
+    function testSetMinMaturity_RespectsAbsoluteBounds() public {
+        bondMMA.initialize(INITIAL_CASH, address(oracle), address(stablecoin));
+
+        // Below absolute minimum (1 day)
+        vm.expectRevert("Below absolute minimum");
+        bondMMA.setMinMaturity(1 hours);
+
+        // Above maxMaturity
+        vm.expectRevert("Min must be < max");
+        bondMMA.setMinMaturity(400 days);
+    }
+
+    /// @notice Test setMaxMaturity only callable by owner
+    function testSetMaxMaturity_OnlyOwner() public {
+        bondMMA.initialize(INITIAL_CASH, address(oracle), address(stablecoin));
+
+        // Non-owner cannot set
+        vm.prank(user1);
+        vm.expectRevert();
+        bondMMA.setMaxMaturity(180 days);
+
+        // Owner can set
+        bondMMA.setMaxMaturity(180 days);
+        assertEq(bondMMA.maxMaturity(), 180 days, "maxMaturity should be updated");
+    }
+
+    /// @notice Test setMaxMaturity respects bounds
+    function testSetMaxMaturity_RespectsAbsoluteBounds() public {
+        bondMMA.initialize(INITIAL_CASH, address(oracle), address(stablecoin));
+
+        // Above absolute maximum (730 days / 2 years)
+        vm.expectRevert("Above absolute maximum");
+        bondMMA.setMaxMaturity(800 days);
+
+        // Below minMaturity
+        vm.expectRevert("Max must be > min");
+        bondMMA.setMaxMaturity(20 days);
+    }
+
+    /// @notice Test setCollateralRatio only callable by owner
+    function testSetCollateralRatio_OnlyOwner() public {
+        bondMMA.initialize(INITIAL_CASH, address(oracle), address(stablecoin));
+
+        // Non-owner cannot set
+        vm.prank(user1);
+        vm.expectRevert();
+        bondMMA.setCollateralRatio(200);
+
+        // Owner can set
+        bondMMA.setCollateralRatio(200);
+        assertEq(bondMMA.collateralRatio(), 200, "collateralRatio should be updated");
+    }
+
+    /// @notice Test setCollateralRatio respects bounds (100-300%)
+    function testSetCollateralRatio_RespectsAbsoluteBounds() public {
+        bondMMA.initialize(INITIAL_CASH, address(oracle), address(stablecoin));
+
+        // Below minimum (100%)
+        vm.expectRevert("Below minimum ratio");
+        bondMMA.setCollateralRatio(99);
+
+        // Above maximum (300%)
+        vm.expectRevert("Above maximum ratio");
+        bondMMA.setCollateralRatio(301);
+    }
+
+    /// @notice Test setSolvencyThreshold only callable by owner
+    function testSetSolvencyThreshold_OnlyOwner() public {
+        bondMMA.initialize(INITIAL_CASH, address(oracle), address(stablecoin));
+
+        // Non-owner cannot set
+        vm.prank(user1);
+        vm.expectRevert();
+        bondMMA.setSolvencyThreshold(95);
+
+        // Owner can set
+        bondMMA.setSolvencyThreshold(95);
+        assertEq(bondMMA.solvencyThreshold(), 95, "solvencyThreshold should be updated");
+    }
+
+    /// @notice Test setSolvencyThreshold respects bounds (90-100%)
+    function testSetSolvencyThreshold_RespectsAbsoluteBounds() public {
+        bondMMA.initialize(INITIAL_CASH, address(oracle), address(stablecoin));
+
+        // Below minimum (90%)
+        vm.expectRevert("Below minimum threshold");
+        bondMMA.setSolvencyThreshold(89);
+
+        // Above maximum (100%)
+        vm.expectRevert("Above maximum threshold");
+        bondMMA.setSolvencyThreshold(101);
+    }
+
+    /// @notice Test setGracePeriod only callable by owner
+    function testSetGracePeriod_OnlyOwner() public {
+        bondMMA.initialize(INITIAL_CASH, address(oracle), address(stablecoin));
+
+        // Non-owner cannot set
+        vm.prank(user1);
+        vm.expectRevert();
+        bondMMA.setGracePeriod(12 hours);
+
+        // Owner can set
+        bondMMA.setGracePeriod(12 hours);
+        assertEq(bondMMA.gracePeriod(), 12 hours, "gracePeriod should be updated");
+    }
+
+    /// @notice Test setGracePeriod respects bounds (1 hour - 7 days)
+    function testSetGracePeriod_RespectsAbsoluteBounds() public {
+        bondMMA.initialize(INITIAL_CASH, address(oracle), address(stablecoin));
+
+        // Below minimum (1 hour)
+        vm.expectRevert("Below minimum grace period");
+        bondMMA.setGracePeriod(30 minutes);
+
+        // Above maximum (7 days)
+        vm.expectRevert("Above maximum grace period");
+        bondMMA.setGracePeriod(8 days);
+    }
+
+    /// @notice Test setLiquidationPenalty only callable by owner
+    function testSetLiquidationPenalty_OnlyOwner() public {
+        bondMMA.initialize(INITIAL_CASH, address(oracle), address(stablecoin));
+
+        // Non-owner cannot set
+        vm.prank(user1);
+        vm.expectRevert();
+        bondMMA.setLiquidationPenalty(10);
+
+        // Owner can set
+        bondMMA.setLiquidationPenalty(10);
+        assertEq(bondMMA.liquidationPenalty(), 10, "liquidationPenalty should be updated");
+    }
+
+    /// @notice Test setLiquidationPenalty respects max bound (20%)
+    function testSetLiquidationPenalty_RespectsAbsoluteBounds() public {
+        bondMMA.initialize(INITIAL_CASH, address(oracle), address(stablecoin));
+
+        // Above maximum (20%)
+        vm.expectRevert("Penalty too high");
+        bondMMA.setLiquidationPenalty(21);
+
+        // Zero is allowed
+        bondMMA.setLiquidationPenalty(0);
+        assertEq(bondMMA.liquidationPenalty(), 0, "Zero penalty should be allowed");
+    }
+
+    /// @notice Test setOracle only callable by owner
+    function testSetOracle_OnlyOwner() public {
+        bondMMA.initialize(INITIAL_CASH, address(oracle), address(stablecoin));
+
+        // Deploy a new oracle
+        MockOracle newOracle = new MockOracle(ANCHOR_RATE);
+
+        // Non-owner cannot set
+        vm.prank(user1);
+        vm.expectRevert();
+        bondMMA.setOracle(address(newOracle));
+
+        // Owner can set
+        bondMMA.setOracle(address(newOracle));
+        assertEq(address(bondMMA.oracle()), address(newOracle), "Oracle should be updated");
+    }
+
+    /// @notice Test setOracle rejects zero address
+    function testSetOracle_RejectsZeroAddress() public {
+        bondMMA.initialize(INITIAL_CASH, address(oracle), address(stablecoin));
+
+        vm.expectRevert("Invalid oracle address");
+        bondMMA.setOracle(address(0));
+    }
+
+    /// @notice Test updated parameters affect trading behavior
+    function testAdminParams_AffectTrading() public {
+        bondMMA.initialize(INITIAL_CASH, address(oracle), address(stablecoin));
+
+        // Update collateral ratio to 200%
+        bondMMA.setCollateralRatio(200);
+
+        // Now 150% collateral should be rejected
+        stablecoin.mint(user1, 15_000 ether);
+        vm.prank(user1);
+        stablecoin.approve(address(bondMMA), 15_000 ether);
+
+        vm.prank(user1);
+        vm.expectRevert("Insufficient collateral");
+        bondMMA.borrow(10_000 ether, block.timestamp + 90 days, 15_000 ether);
+
+        // But 200% collateral works
+        stablecoin.mint(user1, 5_000 ether); // Now has 20,000
+        vm.prank(user1);
+        stablecoin.approve(address(bondMMA), 20_000 ether);
+
+        vm.prank(user1);
+        bondMMA.borrow(10_000 ether, block.timestamp + 90 days, 20_000 ether);
+
+        console2.log("Admin params affect trading correctly");
     }
 }
