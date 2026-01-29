@@ -69,30 +69,45 @@ contract BondMMA is IBondMMA, ReentrancyGuard, Ownable, Pausable {
                                CONSTANTS
     //////////////////////////////////////////////////////////////*/
 
-    /// @notice Rate sensitivity parameter κ = 0.02 (scaled)
+    /// @notice Rate sensitivity parameter κ = 0.02 (scaled) - Fixed, not configurable
     uint256 public constant KAPPA = 20;
     uint256 public constant KAPPA_SCALE = 1000;
 
-    /// @notice Minimum maturity: 30 days
-    uint256 public constant MIN_MATURITY = 30 days;
-
-    /// @notice Maximum maturity: 365 days
-    uint256 public constant MAX_MATURITY = 365 days;
-
-    /// @notice Collateral ratio: 150%
-    uint256 public constant COLLATERAL_RATIO = 150;
-
-    /// @notice Solvency threshold: 99% of initial cash
-    uint256 public constant SOLVENCY_THRESHOLD = 99;
-
-    /// @notice Grace period after maturity before liquidation (24 hours)
-    uint256 public constant GRACE_PERIOD = 24 hours;
-
-    /// @notice Liquidation penalty: 5%
-    uint256 public constant LIQUIDATION_PENALTY = 5;
-
-    /// @notice Precision scale
+    /// @notice Precision scale - Fixed
     uint256 public constant PRECISION = 1e18;
+
+    /// @notice Absolute bounds for configurable parameters
+    uint256 public constant ABSOLUTE_MIN_MATURITY = 1 days;
+    uint256 public constant ABSOLUTE_MAX_MATURITY = 730 days; // 2 years max
+    uint256 public constant MIN_COLLATERAL_RATIO = 100; // 100% minimum
+    uint256 public constant MAX_COLLATERAL_RATIO = 300; // 300% maximum
+    uint256 public constant MIN_SOLVENCY_THRESHOLD = 90; // 90% minimum
+    uint256 public constant MAX_SOLVENCY_THRESHOLD = 100; // 100% maximum
+    uint256 public constant MIN_GRACE_PERIOD = 1 hours;
+    uint256 public constant MAX_GRACE_PERIOD = 7 days;
+    uint256 public constant MAX_LIQUIDATION_PENALTY = 20; // 20% max penalty
+
+    /*//////////////////////////////////////////////////////////////
+                        CONFIGURABLE PARAMETERS
+    //////////////////////////////////////////////////////////////*/
+
+    /// @notice Minimum maturity (configurable, default: 30 days)
+    uint256 public minMaturity = 30 days;
+
+    /// @notice Maximum maturity (configurable, default: 365 days)
+    uint256 public maxMaturity = 365 days;
+
+    /// @notice Collateral ratio in percent (configurable, default: 150%)
+    uint256 public collateralRatio = 150;
+
+    /// @notice Solvency threshold in percent (configurable, default: 99%)
+    uint256 public solvencyThreshold = 99;
+
+    /// @notice Grace period after maturity before liquidation (configurable, default: 24 hours)
+    uint256 public gracePeriod = 24 hours;
+
+    /// @notice Liquidation penalty in percent (configurable, default: 5%)
+    uint256 public liquidationPenalty = 5;
 
     /// @notice Fallback rate when oracle is stale (5% = 0.05e18)
     uint256 public fallbackRate = 50000000000000000;
@@ -158,7 +173,7 @@ contract BondMMA is IBondMMA, ReentrancyGuard, Ownable, Pausable {
         uint256 equity = cash + netLiabilities;
 
         // Calculate minimum required equity: 0.99·y₀
-        uint256 minEquity = (initialCash * SOLVENCY_THRESHOLD) / 100;
+        uint256 minEquity = (initialCash * solvencyThreshold) / 100;
 
         return equity >= minEquity;
     }
@@ -322,8 +337,8 @@ contract BondMMA is IBondMMA, ReentrancyGuard, Ownable, Pausable {
 
         // Calculate time to maturity
         uint256 timeToMaturity = maturity - block.timestamp;
-        require(timeToMaturity >= MIN_MATURITY, "Maturity too soon");
-        require(timeToMaturity <= MAX_MATURITY, "Maturity too far");
+        require(timeToMaturity >= minMaturity, "Maturity too soon");
+        require(timeToMaturity <= maxMaturity, "Maturity too far");
 
         // Get current rate from oracle
         uint256 anchorRate = oracle.getRate();
@@ -390,13 +405,13 @@ contract BondMMA is IBondMMA, ReentrancyGuard, Ownable, Pausable {
         require(maturity > block.timestamp, "Maturity must be in future");
 
         // Step 1: Require collateral upfront (150% of borrowed amount)
-        uint256 requiredCollateral = (amount * COLLATERAL_RATIO) / 100;
+        uint256 requiredCollateral = (amount * collateralRatio) / 100;
         require(collateral >= requiredCollateral, "Insufficient collateral");
 
         // Calculate time to maturity
         uint256 timeToMaturity = maturity - block.timestamp;
-        require(timeToMaturity >= MIN_MATURITY, "Maturity too soon");
-        require(timeToMaturity <= MAX_MATURITY, "Maturity too far");
+        require(timeToMaturity >= minMaturity, "Maturity too soon");
+        require(timeToMaturity <= maxMaturity, "Maturity too far");
 
         // Get current rate from oracle
         uint256 anchorRate = oracle.getRate();
@@ -573,13 +588,13 @@ contract BondMMA is IBondMMA, ReentrancyGuard, Ownable, Pausable {
         require(position.isActive, "Position not active");
         require(position.isBorrow, "Not a borrow position");
         require(
-            block.timestamp > position.maturity + GRACE_PERIOD,
+            block.timestamp > position.maturity + gracePeriod,
             "Grace period not expired"
         );
 
         // Calculate debt owed: face value + 5% penalty
         uint256 debt = position.faceValue;
-        uint256 penalty = (debt * LIQUIDATION_PENALTY) / 100;
+        uint256 penalty = (debt * liquidationPenalty) / 100;
         uint256 totalOwed = debt + penalty;
 
         // Seize all collateral
@@ -630,5 +645,91 @@ contract BondMMA is IBondMMA, ReentrancyGuard, Ownable, Pausable {
      */
     function unpause() external onlyOwner {
         _unpause();
+    }
+
+    /*//////////////////////////////////////////////////////////////
+                        ADMIN CONTROL FUNCTIONS
+    //////////////////////////////////////////////////////////////*/
+
+    /**
+     * @notice Set minimum maturity for positions
+     * @dev Only owner can change. Must be within absolute bounds.
+     * @param _minMaturity New minimum maturity in seconds
+     */
+    function setMinMaturity(uint256 _minMaturity) external onlyOwner {
+        require(_minMaturity >= ABSOLUTE_MIN_MATURITY, "Below absolute minimum");
+        require(_minMaturity < maxMaturity, "Min must be < max");
+        minMaturity = _minMaturity;
+        emit MinMaturityUpdated(_minMaturity);
+    }
+
+    /**
+     * @notice Set maximum maturity for positions
+     * @dev Only owner can change. Must be within absolute bounds.
+     * @param _maxMaturity New maximum maturity in seconds
+     */
+    function setMaxMaturity(uint256 _maxMaturity) external onlyOwner {
+        require(_maxMaturity <= ABSOLUTE_MAX_MATURITY, "Above absolute maximum");
+        require(_maxMaturity > minMaturity, "Max must be > min");
+        maxMaturity = _maxMaturity;
+        emit MaxMaturityUpdated(_maxMaturity);
+    }
+
+    /**
+     * @notice Set collateral ratio for borrows
+     * @dev Only owner can change. Must be within bounds (100-300%).
+     * @param _collateralRatio New collateral ratio in percent (e.g., 150 = 150%)
+     */
+    function setCollateralRatio(uint256 _collateralRatio) external onlyOwner {
+        require(_collateralRatio >= MIN_COLLATERAL_RATIO, "Below minimum ratio");
+        require(_collateralRatio <= MAX_COLLATERAL_RATIO, "Above maximum ratio");
+        collateralRatio = _collateralRatio;
+        emit CollateralRatioUpdated(_collateralRatio);
+    }
+
+    /**
+     * @notice Set solvency threshold
+     * @dev Only owner can change. Must be within bounds (90-100%).
+     * @param _solvencyThreshold New solvency threshold in percent (e.g., 99 = 99%)
+     */
+    function setSolvencyThreshold(uint256 _solvencyThreshold) external onlyOwner {
+        require(_solvencyThreshold >= MIN_SOLVENCY_THRESHOLD, "Below minimum threshold");
+        require(_solvencyThreshold <= MAX_SOLVENCY_THRESHOLD, "Above maximum threshold");
+        solvencyThreshold = _solvencyThreshold;
+        emit SolvencyThresholdUpdated(_solvencyThreshold);
+    }
+
+    /**
+     * @notice Set grace period before liquidation
+     * @dev Only owner can change. Must be within bounds (1 hour - 7 days).
+     * @param _gracePeriod New grace period in seconds
+     */
+    function setGracePeriod(uint256 _gracePeriod) external onlyOwner {
+        require(_gracePeriod >= MIN_GRACE_PERIOD, "Below minimum grace period");
+        require(_gracePeriod <= MAX_GRACE_PERIOD, "Above maximum grace period");
+        gracePeriod = _gracePeriod;
+        emit GracePeriodUpdated(_gracePeriod);
+    }
+
+    /**
+     * @notice Set liquidation penalty
+     * @dev Only owner can change. Must not exceed 20%.
+     * @param _liquidationPenalty New liquidation penalty in percent (e.g., 5 = 5%)
+     */
+    function setLiquidationPenalty(uint256 _liquidationPenalty) external onlyOwner {
+        require(_liquidationPenalty <= MAX_LIQUIDATION_PENALTY, "Penalty too high");
+        liquidationPenalty = _liquidationPenalty;
+        emit LiquidationPenaltyUpdated(_liquidationPenalty);
+    }
+
+    /**
+     * @notice Set oracle contract address
+     * @dev Only owner can change. Cannot be zero address.
+     * @param _oracle New oracle contract address
+     */
+    function setOracle(address _oracle) external onlyOwner {
+        require(_oracle != address(0), "Invalid oracle address");
+        oracle = IOracle(_oracle);
+        emit OracleUpdated(_oracle);
     }
 }
