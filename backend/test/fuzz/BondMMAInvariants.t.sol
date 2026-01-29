@@ -125,7 +125,7 @@ contract BondMMAInvariants is Test {
     function testFuzz_LendPreservesInvariant(uint256 amount, uint256 timeToMaturity) public {
         // Bound inputs to reasonable ranges
         amount = bound(amount, 1 ether, 50_000 ether); // 1 to 50k DAI
-        timeToMaturity = bound(timeToMaturity, bondMMA.MIN_MATURITY(), bondMMA.MAX_MATURITY());
+        timeToMaturity = bound(timeToMaturity, bondMMA.minMaturity(), bondMMA.maxMaturity());
 
         uint256 maturity = block.timestamp + timeToMaturity;
 
@@ -155,7 +155,7 @@ contract BondMMAInvariants is Test {
     function testFuzz_BorrowPreservesInvariant(uint256 amount, uint256 timeToMaturity) public {
         // Bound inputs
         amount = bound(amount, 1 ether, 30_000 ether); // Leave room for pool liquidity
-        timeToMaturity = bound(timeToMaturity, bondMMA.MIN_MATURITY(), bondMMA.MAX_MATURITY());
+        timeToMaturity = bound(timeToMaturity, bondMMA.minMaturity(), bondMMA.maxMaturity());
 
         uint256 maturity = block.timestamp + timeToMaturity;
         uint256 collateral = (amount * 150) / 100; // 150% collateral
@@ -193,7 +193,7 @@ contract BondMMAInvariants is Test {
         amount1 = bound(amount1, 1 ether, 15_000 ether);
         amount2 = bound(amount2, 1 ether, 15_000 ether);
         amount3 = bound(amount3, 1 ether, 15_000 ether);
-        timeToMaturity = bound(timeToMaturity, bondMMA.MIN_MATURITY(), bondMMA.MAX_MATURITY());
+        timeToMaturity = bound(timeToMaturity, bondMMA.minMaturity(), bondMMA.maxMaturity());
 
         uint256 maturity = block.timestamp + timeToMaturity;
 
@@ -224,7 +224,7 @@ contract BondMMAInvariants is Test {
     /// @notice Fuzz test: Pool remains solvent after lending
     function testFuzz_SolvencyAfterLend(uint256 amount, uint256 timeToMaturity) public {
         amount = bound(amount, 1 ether, 50_000 ether);
-        timeToMaturity = bound(timeToMaturity, bondMMA.MIN_MATURITY(), bondMMA.MAX_MATURITY());
+        timeToMaturity = bound(timeToMaturity, bondMMA.minMaturity(), bondMMA.maxMaturity());
 
         vm.prank(user1);
         bondMMA.lend(amount, block.timestamp + timeToMaturity);
@@ -236,7 +236,7 @@ contract BondMMAInvariants is Test {
     /// @notice Fuzz test: Pool remains solvent after borrow
     function testFuzz_SolvencyAfterBorrow(uint256 amount, uint256 timeToMaturity) public {
         amount = bound(amount, 1 ether, 30_000 ether);
-        timeToMaturity = bound(timeToMaturity, bondMMA.MIN_MATURITY(), bondMMA.MAX_MATURITY());
+        timeToMaturity = bound(timeToMaturity, bondMMA.minMaturity(), bondMMA.maxMaturity());
 
         uint256 collateral = (amount * 150) / 100;
 
@@ -254,7 +254,7 @@ contract BondMMAInvariants is Test {
     /// @notice Fuzz test: Rate remains within bounds
     function testFuzz_RateWithinBounds(uint256 amount, uint256 timeToMaturity) public {
         amount = bound(amount, 1 ether, 40_000 ether);
-        timeToMaturity = bound(timeToMaturity, bondMMA.MIN_MATURITY(), bondMMA.MAX_MATURITY());
+        timeToMaturity = bound(timeToMaturity, bondMMA.minMaturity(), bondMMA.maxMaturity());
 
         vm.prank(user1);
         bondMMA.lend(amount, block.timestamp + timeToMaturity);
@@ -268,7 +268,7 @@ contract BondMMAInvariants is Test {
 
     /// @notice Fuzz test: Price remains ≤ 1
     function testFuzz_PriceAtMostOne(uint256 timeToMaturity) public view {
-        timeToMaturity = bound(timeToMaturity, bondMMA.MIN_MATURITY(), bondMMA.MAX_MATURITY());
+        timeToMaturity = bound(timeToMaturity, bondMMA.minMaturity(), bondMMA.maxMaturity());
 
         uint256 currentRate = bondMMA.getCurrentRate();
         uint256 price = BondMMMath.calculatePrice(timeToMaturity, currentRate);
@@ -314,7 +314,7 @@ contract BondMMAInvariants is Test {
     /// @notice Fuzz test: pvBonds stays positive
     function testFuzz_PvBondsStaysPositive(uint256 amount, uint256 timeToMaturity) public {
         amount = bound(amount, 1 ether, 40_000 ether);
-        timeToMaturity = bound(timeToMaturity, bondMMA.MIN_MATURITY(), bondMMA.MAX_MATURITY());
+        timeToMaturity = bound(timeToMaturity, bondMMA.minMaturity(), bondMMA.maxMaturity());
 
         vm.prank(user1);
         bondMMA.lend(amount, block.timestamp + timeToMaturity);
@@ -357,7 +357,7 @@ contract BondMMAInvariants is Test {
     /// @notice Fuzz test: Redeem at maturity
     function testFuzz_RedeemAtMaturity(uint256 amount, uint256 timeToMaturity) public {
         amount = bound(amount, 1 ether, 30_000 ether);
-        timeToMaturity = bound(timeToMaturity, bondMMA.MIN_MATURITY(), bondMMA.MAX_MATURITY());
+        timeToMaturity = bound(timeToMaturity, bondMMA.minMaturity(), bondMMA.maxMaturity());
 
         uint256 maturity = block.timestamp + timeToMaturity;
 
@@ -389,7 +389,7 @@ contract BondMMAInvariants is Test {
     /// @notice Fuzz test: Repay at maturity
     function testFuzz_RepayAtMaturity(uint256 amount, uint256 timeToMaturity) public {
         amount = bound(amount, 1 ether, 20_000 ether);
-        timeToMaturity = bound(timeToMaturity, bondMMA.MIN_MATURITY(), bondMMA.MAX_MATURITY());
+        timeToMaturity = bound(timeToMaturity, bondMMA.minMaturity(), bondMMA.maxMaturity());
 
         uint256 maturity = block.timestamp + timeToMaturity;
         uint256 collateral = (amount * 150) / 100;
